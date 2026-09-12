@@ -1,15 +1,15 @@
 plugins {
-    alias(libs.plugins.android.application)
-    alias(libs.plugins.kotlin.android)
+    id("com.android.application")
+    id("org.jetbrains.kotlin.android")
     id("kotlin-kapt")
 }
 
 android {
-    namespace = "com.example.amneziawg" // اگر نام پکیج پروژه‌تان فرق دارد، این خط را تغییر ندهید
+    namespace = "com.example.amneziawg" // نام پکیج فعلی خودتان اگر چیز دیگری است بگذارید بماند
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.example.amneziawg" // اگر applicationId متفاوتی دارید، آن را نگه دارید
+        applicationId = "com.example.amneziawg" // در صورت متفاوت بودن، آیدی فعلی پروژه را حفظ کنید
         minSdk = 24
         targetSdk = 34
         versionCode = 1
@@ -40,28 +40,23 @@ android {
 }
 
 dependencies {
-    // پایه‌های استاندارد اندروید
+    // پیش‌فرض‌های اندروید
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("com.google.android.material:material:1.12.0")
     implementation("androidx.constraintlayout:constraintlayout:2.1.4")
 
-    // کروتین و چرخه حیات (Lifecycle & Coroutines)
+    // کروتین و چرخه‌حیات
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.4")
     implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.8.4")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
 
-    // دیتابیس روم (Room Database)
+    // دیتابیس Room برای ذخیره چند کانفیگ
     val roomVersion = "2.6.1"
     implementation("androidx.room:room-runtime:$roomVersion")
     implementation("androidx.room:room-ktx:$roomVersion")
     kapt("androidx.room:room-compiler:$roomVersion")
 
-    // شبکه و استعلام اطلاعات لوکیشن و سرور (OkHttp)
+    // دریافت موقعیت و پرچم کشور
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
-
-    // تست
-    testImplementation("junit:junit:4.13.2")
-    androidTestImplementation("androidx.test.ext:junit:1.2.1")
-    androidTestImplementation("androidx.test.espresso:espresso-core:3.6.1")
 }
