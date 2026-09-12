@@ -60,50 +60,84 @@ class TunnelService : VpnService() {
         try {
             startForeground(1, createNotification("در حال اتصال..."))
 
+            val mtu = if (config.mtu in 1200..1500) config.mtu else 1280
+
             val builder = Builder()
                 .setSession("AWG Tunnel")
-                .setMtu(config.mtu)
+                .setMtu(mtu)
+                .setBlocking(false)
 
-            // اعمال آدرس IP
-            config.address.split(",").forEach { addrStr ->
-                val part = addrStr.trim()
-                if (part.isNotEmpty()) {
-                    val ipParts = part.split("/")
-                    val ip = ipParts[0]
-                    val prefix = if (ipParts.size > 1) ipParts[1].toIntOrNull() ?: 32 else 32
-                    builder.addAddress(ip, prefix)
+            // ۱. اعمال آدرس اینترفیس کلاینت
+            var hasAddress = false
+            if (config.address.isNotBlank()) {
+                config.address.split(",").forEach { addrStr ->
+                    val part = addrStr.trim()
+                    if (part.isNotEmpty()) {
+                        val ipParts = part.split("/")
+                        val ip = ipParts[0].trim()
+                        val prefix = if (ipParts.size > 1) ipParts[1].trim().toIntOrNull() ?: 32 else 32
+                        try {
+                            builder.addAddress(ip, prefix)
+                            hasAddress = true
+                        } catch (_: Exception) {}
+                    }
                 }
             }
-
-            // اعمال DNS
-            config.dns.split(",").forEach { dnsStr ->
-                val dns = dnsStr.trim()
-                if (dns.isNotEmpty()) {
-                    builder.addDnsServer(dns)
-                }
+            // اگر آدرس خالی بود، یک آی‌پی مجازی پیش‌فرض بده تا سیستم کرش نکند
+            if (!hasAddress) {
+                builder.addAddress("10.66.66.2", 24)
             }
 
-            // اعمال مسیردهی ترافیک (AllowedIPs)
-            config.allowedIps.split(",").forEach { routeStr ->
-                val route = routeStr.trim()
-                if (route.isNotEmpty()) {
-                    val parts = route.split("/")
-                    val ip = parts[0]
-                    val prefix = if (parts.size > 1) parts[1].toIntOrNull() ?: 0 else 0
-                    try {
-                        builder.addRoute(ip, prefix)
-                    } catch (_: Exception) {}
+            // ۲. اعمال DNS قطعی و پایدار برای ریزالو شدن تلگرام و سایت‌ها
+            var hasDns = false
+            if (config.dns.isNotBlank()) {
+                config.dns.split(",").forEach { dnsStr ->
+                    val dns = dnsStr.trim()
+                    if (dns.isNotEmpty()) {
+                        try {
+                            builder.addDnsServer(dns)
+                            hasDns = true
+                        } catch (_: Exception) {}
+                    }
                 }
             }
+            // در صورت خالی بودن DNS در کانکشن، حتما کلودفلر و گوگل ست شوند
+            if (!hasDns) {
+                builder.addDnsServer("1.1.1.1")
+                builder.addDnsServer("8.8.8.8")
+            }
 
-            // اعمال Split Tunneling (استثنا کردن اپلیکیشن‌های انتخاب شده)
+            // ۳. روت کردن تمام ترافیک تلفن به درون تونل (0.0.0.0/0 و ::/0)
+            var hasRoute = false
+            if (config.allowedIps.isNotBlank()) {
+                config.allowedIps.split(",").forEach { routeStr ->
+                    val route = routeStr.trim()
+                    if (route.isNotEmpty()) {
+                        val parts = route.split("/")
+                        val ip = parts[0].trim()
+                        val prefix = if (parts.size > 1) parts[1].trim().toIntOrNull() ?: 0 else 0
+                        try {
+                            builder.addRoute(ip, prefix)
+                            hasRoute = true
+                        } catch (_: Exception) {}
+                    }
+                }
+            }
+            if (!hasRoute) {
+                builder.addRoute("0.0.0.0", 0)
+                try {
+                    builder.addRoute("::", 0)
+                } catch (_: Exception) {}
+            }
+
+            // ۴. اعمال Split Tunneling برای اپ‌های مستثنی‌شده
             disallowedApps.forEach { pkg ->
                 try {
                     builder.addDisallowedApplication(pkg)
                 } catch (_: Exception) {}
             }
 
-            // احراز شرایط تونل و باز کردن سوکت
+            // ایجاد نهایی اینترفیس ترافیک
             vpnInterface = builder.establish()
 
             if (vpnInterface != null) {
@@ -182,4 +216,3 @@ class TunnelService : VpnService() {
             .build()
     }
 }
-
