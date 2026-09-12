@@ -30,7 +30,7 @@
         android:id="@+id/btnDelete"
         android:layout_width="38dp"
         android:layout_height="38dp"
-        android:background="?attr/selectableItemBackgroundBorderless"
+        android:background="?android:attr/selectableItemBackgroundBorderless"
         android:src="@android:drawable/ic_menu_delete"
         android:tint="#D32F2F"
         android:contentDescription="Delete" />
