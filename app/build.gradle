@@ -37,11 +37,6 @@ android {
     composeOptions {
         kotlinCompilerExtensionVersion '1.5.8'
     }
-    packagingOptions {
-        resources {
-            excludes += '/META-INF/{AL2.0,LGPL2.1}'
-        }
-    }
 }
 
 dependencies {
@@ -55,17 +50,14 @@ dependencies {
     implementation 'androidx.compose.material3:material3'
     implementation 'androidx.compose.material:material-icons-extended'
 
-    // اسکنر بارکد
+    // اسکن بارکد
     implementation 'com.journeyapps:zxing-android-embedded:4.3.0'
 
-    // دیتابیس روم
+    // ذخیره‌سازی لیست کانفیگ‌ها (Room)
     implementation 'androidx.room:room-runtime:2.6.1'
     implementation 'androidx.room:room-ktx:2.6.1'
     kapt 'androidx.room:room-compiler:2.6.1'
 
-    // استعلام موقعیت و شبکه
+    // دریافت نام کشور و آی‌پی
     implementation 'com.squareup.okhttp3:okhttp:4.12.0'
-
-    // هسته پردازش ترافیک و پروتکل وایرگارد
-    implementation 'com.wireguard.android:tunnel:1.0.20231011'
 }
