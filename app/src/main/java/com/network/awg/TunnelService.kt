@@ -29,6 +29,7 @@ class TunnelService : VpnService() {
             _isRunning.value = (newState == Tunnel.State.UP)
         }
         override fun isIpv4ResolutionPreferred(): Boolean = true
+        override fun isMetered(): Boolean = false
     }
 
     companion object {
