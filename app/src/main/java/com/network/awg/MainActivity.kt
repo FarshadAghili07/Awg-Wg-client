@@ -13,7 +13,6 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -25,6 +24,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -39,6 +40,10 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
+import com.network.awg.data.AppDatabase
+import com.network.awg.data.ConfigEntity
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 data class AppItem(
     val name: String,
@@ -58,6 +63,9 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun AwgClientApp() {
     val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
+    val db = remember { AppDatabase.getDatabase(context) }
+
     val prefs: SharedPreferences = remember {
         context.getSharedPreferences("awg_prefs", Context.MODE_PRIVATE)
     }
@@ -66,11 +74,16 @@ fun AwgClientApp() {
     val downloadSpeed by TunnelService.downloadSpeed.collectAsState()
     val uploadSpeed by TunnelService.uploadSpeed.collectAsState()
 
-    // بارگذاری کانفیگ ذخیره شده قبلی
-    var configText by remember { mutableStateOf(prefs.getString("saved_config", "") ?: "") }
+    // دریافت لیست زنده کانفیگ‌ها از دیتابیس Room
+    val configList by db.configDao().getAllConfigs().collectAsState(initial = emptyList())
+
+    var configInputText by remember { mutableStateOf("") }
     var isDarkTheme by remember { mutableStateOf(true) }
     var isEnglish by remember { mutableStateOf(false) }
     var showSplitTunnelDialog by remember { mutableStateOf(false) }
+
+    // اطلاعات کشور متصل‌شده
+    var connectedCountryInfo by remember { mutableStateOf<ServerLocation?>(null) }
 
     val disallowedApps = remember {
         mutableStateListOf<String>().apply {
@@ -78,18 +91,42 @@ fun AwgClientApp() {
         }
     }
 
-    fun saveConfigToStorage(text: String) {
-        prefs.edit().putString("saved_config", text).apply()
-        Toast.makeText(context, if (isEnglish) "Config Saved!" else "کانفیگ ذخیره شد", Toast.LENGTH_SHORT).show()
+    // استعلام کشور و لوکیشن پس از برقراری اتصال موفقیت‌آمیز
+    LaunchedEffect(isRunning) {
+        if (isRunning) {
+            delay(2000) // تاخیر کوتاه برای تثبیت ترافیک در تونل
+            connectedCountryInfo = LocationHelper.fetchConnectedCountry()
+        } else {
+            connectedCountryInfo = null
+        }
+    }
+
+    val selectedConfig = configList.find { it.isSelected }
+
+    fun addConfig(rawText: String) {
+        if (rawText.isBlank()) return
+        coroutineScope.launch {
+            val count = configList.size + 1
+            db.configDao().insert(
+                ConfigEntity(
+                    name = if (isEnglish) "Config #$count" else "کانفیگ $count",
+                    rawUri = rawText.trim(),
+                    isSelected = configList.isEmpty()
+                )
+            )
+            configInputText = ""
+            Toast.makeText(context, if (isEnglish) "Config Saved!" else "کانفیگ ذخیره شد", Toast.LENGTH_SHORT).show()
+        }
     }
 
     val vpnPrepareLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
     ) { result ->
         if (result.resultCode == Activity.RESULT_OK) {
+            val target = selectedConfig?.rawUri ?: configInputText
             val intent = Intent(context, TunnelService::class.java).apply {
                 action = TunnelService.ACTION_CONNECT
-                putExtra(TunnelService.EXTRA_CONFIG, configText)
+                putExtra(TunnelService.EXTRA_CONFIG, target)
                 putStringArrayListExtra(TunnelService.EXTRA_DISALLOWED_APPS, ArrayList(disallowedApps))
             }
             context.startService(intent)
@@ -102,8 +139,7 @@ fun AwgClientApp() {
         contract = ScanContract()
     ) { result ->
         if (result.contents != null) {
-            configText = result.contents
-            saveConfigToStorage(result.contents)
+            addConfig(result.contents)
         }
     }
 
@@ -161,7 +197,6 @@ fun AwgClientApp() {
                 )
 
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    // سوییچ زبان
                     Box(
                         modifier = Modifier
                             .clip(RoundedCornerShape(14.dp))
@@ -173,7 +208,6 @@ fun AwgClientApp() {
                         Text(if (isEnglish) "FA" else "EN", color = cyanAccent, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                     }
 
-                    // دکمه Split Tunneling
                     Box(
                         modifier = Modifier
                             .clip(RoundedCornerShape(14.dp))
@@ -185,7 +219,6 @@ fun AwgClientApp() {
                         Text(if (isEnglish) "Apps" else "برنامه‌ها", color = purpleAccent, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                     }
 
-                    // تغییر تم
                     Box(
                         modifier = Modifier
                             .clip(RoundedCornerShape(14.dp))
@@ -201,7 +234,7 @@ fun AwgClientApp() {
 
             Spacer(modifier = Modifier.height(18.dp))
 
-            // باکس‌های سرعت دانلود و آپلود
+            // سرعت دانلود و آپلود
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
@@ -247,9 +280,9 @@ fun AwgClientApp() {
                 }
             }
 
-            Spacer(modifier = Modifier.height(28.dp))
+            Spacer(modifier = Modifier.height(24.dp))
 
-            // دکمه بزرگ اتصال VPN
+            // دکمه اتصال
             Box(
                 modifier = Modifier
                     .size(190.dp)
@@ -267,11 +300,15 @@ fun AwgClientApp() {
                             }
                             context.startService(intent)
                         } else {
-                            if (configText.isBlank()) {
-                                Toast.makeText(context, if (isEnglish) "Please enter or scan a config" else "لطفاً کانفیگ را وارد کنید", Toast.LENGTH_SHORT).show()
+                            val targetConfig = selectedConfig?.rawUri ?: configInputText
+                            if (targetConfig.isBlank()) {
+                                Toast.makeText(
+                                    context,
+                                    if (isEnglish) "Please select or add a config" else "لطفاً کانفیگی انتخاب یا ثبت کنید",
+                                    Toast.LENGTH_SHORT
+                                ).show()
                                 return@clickable
                             }
-                            saveConfigToStorage(configText)
 
                             val prepareIntent = VpnService.prepare(context)
                             if (prepareIntent != null) {
@@ -279,7 +316,7 @@ fun AwgClientApp() {
                             } else {
                                 val intent = Intent(context, TunnelService::class.java).apply {
                                     action = TunnelService.ACTION_CONNECT
-                                    putExtra(TunnelService.EXTRA_CONFIG, configText)
+                                    putExtra(TunnelService.EXTRA_CONFIG, targetConfig)
                                     putStringArrayListExtra(TunnelService.EXTRA_DISALLOWED_APPS, ArrayList(disallowedApps))
                                 }
                                 context.startService(intent)
@@ -306,25 +343,108 @@ fun AwgClientApp() {
                 }
             }
 
-            Spacer(modifier = Modifier.height(28.dp))
+            Spacer(modifier = Modifier.height(14.dp))
 
-            // نوار بالای کادر متنی با دکمه ذخیره و اسکن QR
+            // نمایش کشور و پرچم متصل شده
+            if (isRunning) {
+                Text(
+                    text = connectedCountryInfo?.let { "${it.flagEmoji} ${it.country} (${it.ip})" }
+                        ?: if (isEnglish) "Detecting Location..." else "در حال بررسی کشور و موقعیت...",
+                    color = if (connectedCountryInfo != null) cyanAccent else textMuted,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+
+            Spacer(modifier = Modifier.height(18.dp))
+
+            // بخش لیست کانفیگ‌های ذخیره شده
+            if (configList.isNotEmpty()) {
+                Text(
+                    text = if (isEnglish) "Saved Configs (Select One):" else "کانفیگ‌های ذخیره شده (یکی را انتخاب کنید):",
+                    color = textMain,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    configList.forEach { item ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(if (item.isSelected) cyanAccent.copy(alpha = 0.12f) else cardBg)
+                                .border(
+                                    1.dp,
+                                    if (item.isSelected) cyanAccent else borderCol,
+                                    RoundedCornerShape(12.dp)
+                                )
+                                .clickable {
+                                    coroutineScope.launch {
+                                        db.configDao().selectConfig(item.id)
+                                    }
+                                }
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                RadioButton(
+                                    selected = item.isSelected,
+                                    onClick = {
+                                        coroutineScope.launch {
+                                            db.configDao().selectConfig(item.id)
+                                        }
+                                    },
+                                    colors = RadioButtonDefaults.colors(selectedColor = cyanAccent)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = item.name,
+                                    color = if (item.isSelected) cyanAccent else textMain,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 14.sp
+                                )
+                            }
+
+                            IconButton(onClick = {
+                                coroutineScope.launch {
+                                    db.configDao().delete(item)
+                                }
+                            }) {
+                                Icon(
+                                    imageVector = Icons.Default.Delete,
+                                    contentDescription = "Delete",
+                                    tint = Color(0xFFEF4444)
+                                )
+                            }
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(18.dp))
+            }
+
+            // بخش افزودن کانفیگ جدید
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = if (isEnglish) "Configuration (URI / .conf)" else "کانفیگ (لینک یا فایل .conf)",
+                    text = if (isEnglish) "Add New Config" else "افزودن کانفیگ جدید",
                     color = textMain,
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Bold
                 )
 
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    // دکمه ثبت کانفیگ
                     Button(
-                        onClick = { saveConfigToStorage(configText) },
+                        onClick = { addConfig(configInputText) },
                         shape = RoundedCornerShape(10.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = activeGreen),
                         contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
@@ -333,7 +453,6 @@ fun AwgClientApp() {
                         Text(if (isEnglish) "Save" else "ثبت کانفیگ", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.White)
                     }
 
-                    // دکمه اسکنر QR
                     Button(
                         onClick = {
                             val options = ScanOptions().apply {
@@ -357,11 +476,11 @@ fun AwgClientApp() {
             Spacer(modifier = Modifier.height(8.dp))
 
             OutlinedTextField(
-                value = configText,
-                onValueChange = { configText = it },
+                value = configInputText,
+                onValueChange = { configInputText = it },
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(170.dp),
+                    .height(140.dp),
                 placeholder = {
                     Text(
                         "wg://... یا awg://... یا [Interface]...",
@@ -392,7 +511,7 @@ fun AwgClientApp() {
             Spacer(modifier = Modifier.height(26.dp))
         }
 
-        // دیالوگ کامل Split Tunneling با تمام برنامه‌های گوشی
+        // دیالوگ Split Tunneling
         if (showSplitTunnelDialog) {
             SplitTunnelDialog(
                 context = context,
@@ -420,10 +539,8 @@ fun SplitTunnelDialog(
 
     LaunchedEffect(Unit) {
         val installed = pm.getInstalledApplications(PackageManager.GET_META_DATA)
-        // تفکیک تمام برنامه‌هایی که آیکون یا امکان باز شدن دارند
         appList = installed
             .filter { app ->
-                // برنامه‌های دارای Intent باز شدن یا برنامه‌های غیرسیستمی
                 pm.getLaunchIntentForPackage(app.packageName) != null || ((app.flags and ApplicationInfo.FLAG_SYSTEM) == 0)
             }
             .map { app ->
