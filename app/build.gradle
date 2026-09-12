@@ -16,6 +16,9 @@ android {
         versionName "1.0"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        ndk {
+            abiFilters "arm64-v8a", "armeabi-v7a", "x86_64"
+        }
     }
 
     buildTypes {
@@ -37,6 +40,11 @@ android {
     composeOptions {
         kotlinCompilerExtensionVersion '1.5.8'
     }
+    packagingOptions {
+        resources {
+            excludes += '/META-INF/{AL2.0,LGPL2.1}'
+        }
+    }
 }
 
 dependencies {
@@ -53,11 +61,14 @@ dependencies {
     // اسکن بارکد
     implementation 'com.journeyapps:zxing-android-embedded:4.3.0'
 
-    // ذخیره‌سازی لیست کانفیگ‌ها (Room)
+    // ذخیره‌سازی لیست کانفیگ‌ها
     implementation 'androidx.room:room-runtime:2.6.1'
     implementation 'androidx.room:room-ktx:2.6.1'
     kapt 'androidx.room:room-compiler:2.6.1'
 
     // دریافت نام کشور و آی‌پی
     implementation 'com.squareup.okhttp3:okhttp:4.12.0'
+
+    // هسته رسمی AmneziaWG کامپایل شده روی Maven Central
+    implementation 'com.zaneschepke:amneziawg-android:2.3.7'
 }
