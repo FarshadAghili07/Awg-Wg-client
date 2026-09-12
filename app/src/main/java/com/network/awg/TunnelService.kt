@@ -7,18 +7,32 @@ import android.content.Intent
 import android.net.TrafficStats
 import android.net.VpnService
 import android.os.Build
-import android.os.ParcelFileDescriptor
 import androidx.core.app.NotificationCompat
+import com.wireguard.android.backend.GoBackend
+import com.wireguard.android.backend.Tunnel
+import com.wireguard.config.Config
+import com.wireguard.config.Interface
+import com.wireguard.config.Peer
+import com.wireguard.crypto.Key
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import java.io.ByteArrayInputStream
 import java.net.InetAddress
 
 class TunnelService : VpnService() {
 
-    private var vpnInterface: ParcelFileDescriptor? = null
     private val serviceScope = CoroutineScope(Dispatchers.IO + Job())
     private var trafficJob: Job? = null
+    private var backend: GoBackend? = null
+
+    // آبجکت تونل برای مدیریت وضعیت بک‌اند
+    private val awgTunnel = object : Tunnel {
+        override fun getName(): String = "awg0"
+        override fun onStateChange(newState: Tunnel.State) {
+            _isRunning.value = (newState == Tunnel.State.UP)
+        }
+    }
 
     companion object {
         const val ACTION_CONNECT = "com.network.awg.CONNECT"
@@ -29,16 +43,17 @@ class TunnelService : VpnService() {
         private val _isRunning = MutableStateFlow(false)
         val isRunning = _isRunning.asStateFlow()
 
-        private val _downloadSpeed = MutableStateFlow(0L) // Bytes per second
+        private val _downloadSpeed = MutableStateFlow(0L)
         val downloadSpeed = _downloadSpeed.asStateFlow()
 
-        private val _uploadSpeed = MutableStateFlow(0L) // Bytes per second
+        private val _uploadSpeed = MutableStateFlow(0L)
         val uploadSpeed = _uploadSpeed.asStateFlow()
     }
 
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
+        backend = GoBackend(applicationContext)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -56,99 +71,37 @@ class TunnelService : VpnService() {
         return START_NOT_STICKY
     }
 
-    private fun startTunnel(config: AwgConfig, disallowedApps: List<String>) {
-        try {
-            startForeground(1, createNotification("در حال اتصال..."))
+    private fun startTunnel(awgConfig: AwgConfig, disallowedApps: List<String>) {
+        serviceScope.launch {
+            try {
+                startForeground(1, createNotification("در حال برقراری تونل امن..."))
 
-            val mtu = if (config.mtu in 1200..1500) config.mtu else 1280
+                // ساخت کانفیگ استاندارد WireGuard برای موتور GoBackend
+                val confBuilder = StringBuilder()
+                confBuilder.append("[Interface]\n")
+                confBuilder.append("PrivateKey = ${awgConfig.privateKey.trim()}\n")
+                confBuilder.append("Address = ${awgConfig.address.trim().ifEmpty { "10.66.66.2/24" }}\n")
+                confBuilder.append("DNS = ${awgConfig.dns.trim().ifEmpty { "1.1.1.1, 8.8.8.8" }}\n")
+                confBuilder.append("MTU = ${if (awgConfig.mtu in 1200..1500) awgConfig.mtu else 1280}\n")
 
-            val builder = Builder()
-                .setSession("AWG Tunnel")
-                .setMtu(mtu)
-                .setBlocking(false)
+                confBuilder.append("\n[Peer]\n")
+                confBuilder.append("PublicKey = ${awgConfig.publicKey.trim()}\n")
+                confBuilder.append("Endpoint = ${awgConfig.endpoint.trim()}\n")
+                confBuilder.append("AllowedIPs = ${awgConfig.allowedIps.trim().ifEmpty { "0.0.0.0/0, ::/0" }}\n")
+                confBuilder.append("PersistentKeepalive = 25\n")
 
-            // ۱. اعمال آدرس اینترفیس کلاینت
-            var hasAddress = false
-            if (config.address.isNotBlank()) {
-                config.address.split(",").forEach { addrStr ->
-                    val part = addrStr.trim()
-                    if (part.isNotEmpty()) {
-                        val ipParts = part.split("/")
-                        val ip = ipParts[0].trim()
-                        val prefix = if (ipParts.size > 1) ipParts[1].trim().toIntOrNull() ?: 32 else 32
-                        try {
-                            builder.addAddress(ip, prefix)
-                            hasAddress = true
-                        } catch (_: Exception) {}
-                    }
-                }
-            }
-            // اگر آدرس خالی بود، یک آی‌پی مجازی پیش‌فرض بده تا سیستم کرش نکند
-            if (!hasAddress) {
-                builder.addAddress("10.66.66.2", 24)
-            }
+                val wgConfig = Config.parse(ByteArrayInputStream(confBuilder.toString().toByteArray()))
 
-            // ۲. اعمال DNS قطعی و پایدار برای ریزالو شدن تلگرام و سایت‌ها
-            var hasDns = false
-            if (config.dns.isNotBlank()) {
-                config.dns.split(",").forEach { dnsStr ->
-                    val dns = dnsStr.trim()
-                    if (dns.isNotEmpty()) {
-                        try {
-                            builder.addDnsServer(dns)
-                            hasDns = true
-                        } catch (_: Exception) {}
-                    }
-                }
-            }
-            // در صورت خالی بودن DNS در کانکشن، حتما کلودفلر و گوگل ست شوند
-            if (!hasDns) {
-                builder.addDnsServer("1.1.1.1")
-                builder.addDnsServer("8.8.8.8")
-            }
+                // استارت هسته شبکه بومی برای هدایت و رمزنگاری پکت‌ها
+                backend?.setState(awgTunnel, Tunnel.State.UP, wgConfig)
 
-            // ۳. روت کردن تمام ترافیک تلفن به درون تونل (0.0.0.0/0 و ::/0)
-            var hasRoute = false
-            if (config.allowedIps.isNotBlank()) {
-                config.allowedIps.split(",").forEach { routeStr ->
-                    val route = routeStr.trim()
-                    if (route.isNotEmpty()) {
-                        val parts = route.split("/")
-                        val ip = parts[0].trim()
-                        val prefix = if (parts.size > 1) parts[1].trim().toIntOrNull() ?: 0 else 0
-                        try {
-                            builder.addRoute(ip, prefix)
-                            hasRoute = true
-                        } catch (_: Exception) {}
-                    }
-                }
-            }
-            if (!hasRoute) {
-                builder.addRoute("0.0.0.0", 0)
-                try {
-                    builder.addRoute("::", 0)
-                } catch (_: Exception) {}
-            }
-
-            // ۴. اعمال Split Tunneling برای اپ‌های مستثنی‌شده
-            disallowedApps.forEach { pkg ->
-                try {
-                    builder.addDisallowedApplication(pkg)
-                } catch (_: Exception) {}
-            }
-
-            // ایجاد نهایی اینترفیس ترافیک
-            vpnInterface = builder.establish()
-
-            if (vpnInterface != null) {
                 _isRunning.value = true
-                startForeground(1, createNotification("متصل به تونل AmneziaWG"))
+                startForeground(1, createNotification("متصل به تونل WireGuard"))
                 startSpeedMonitoring()
-            } else {
+
+            } catch (e: Exception) {
                 stopTunnel()
             }
-        } catch (e: Exception) {
-            stopTunnel()
         }
     }
 
@@ -177,10 +130,11 @@ class TunnelService : VpnService() {
 
     private fun stopTunnel() {
         trafficJob?.cancel()
-        try {
-            vpnInterface?.close()
-            vpnInterface = null
-        } catch (_: Exception) {}
+        serviceScope.launch {
+            try {
+                backend?.setState(awgTunnel, Tunnel.State.DOWN, null)
+            } catch (_: Exception) {}
+        }
 
         _isRunning.value = false
         _downloadSpeed.value = 0L
