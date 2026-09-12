@@ -3,6 +3,7 @@ package com.network.awg
 import android.app.Activity
 import android.content.Context
 import android.content.Intent
+import android.content.SharedPreferences
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.net.VpnService
@@ -29,7 +30,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
@@ -40,36 +40,49 @@ import androidx.compose.ui.window.Dialog
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 
-data class AppInfoItem(
+data class AppItem(
     val name: String,
     val packageName: String,
-    var isSelected: Boolean
+    var isBypassed: Boolean
 )
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            AwgVpnMainScreen()
+            AwgClientApp()
         }
     }
 }
 
 @Composable
-fun AwgVpnMainScreen() {
+fun AwgClientApp() {
     val context = LocalContext.current
+    val prefs: SharedPreferences = remember {
+        context.getSharedPreferences("awg_prefs", Context.MODE_PRIVATE)
+    }
+
     val isRunning by TunnelService.isRunning.collectAsState()
     val downloadSpeed by TunnelService.downloadSpeed.collectAsState()
     val uploadSpeed by TunnelService.uploadSpeed.collectAsState()
 
-    var configText by remember { mutableStateOf("") }
+    // بارگذاری کانفیگ ذخیره شده قبلی
+    var configText by remember { mutableStateOf(prefs.getString("saved_config", "") ?: "") }
     var isDarkTheme by remember { mutableStateOf(true) }
+    var isEnglish by remember { mutableStateOf(false) }
     var showSplitTunnelDialog by remember { mutableStateOf(false) }
 
-    // برنامه‌های مستثنی شده در Split Tunneling
-    val disallowedApps = remember { mutableStateListOf<String>() }
+    val disallowedApps = remember {
+        mutableStateListOf<String>().apply {
+            addAll(prefs.getStringSet("disallowed_apps", emptySet()) ?: emptySet())
+        }
+    }
 
-    // لانچر دسترسی VPN
+    fun saveConfigToStorage(text: String) {
+        prefs.edit().putString("saved_config", text).apply()
+        Toast.makeText(context, if (isEnglish) "Config Saved!" else "کانفیگ ذخیره شد", Toast.LENGTH_SHORT).show()
+    }
+
     val vpnPrepareLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
     ) { result ->
@@ -81,17 +94,16 @@ fun AwgVpnMainScreen() {
             }
             context.startService(intent)
         } else {
-            Toast.makeText(context, "مجوز اتصال VPN تایید نشد", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, if (isEnglish) "VPN Permission Denied" else "مجوز اتصال تایید نشد", Toast.LENGTH_SHORT).show()
         }
     }
 
-    // لانچر اسکنر QR کد
     val qrScannerLauncher = rememberLauncherForActivityResult(
         contract = ScanContract()
     ) { result ->
         if (result.contents != null) {
             configText = result.contents
-            Toast.makeText(context, "کانفیگ با موفقیت از QR دریافت شد", Toast.LENGTH_SHORT).show()
+            saveConfigToStorage(result.contents)
         }
     }
 
@@ -104,19 +116,18 @@ fun AwgVpnMainScreen() {
     val purpleAccent = Color(0xFFA855F7)
     val activeGreen = Color(0xFF10B981)
 
-    // انیمیشن تنفس دکمه اتصال هنگام اتصال
-    val infiniteTransition = rememberInfiniteTransition(label = "btn_pulse")
+    val infiniteTransition = rememberInfiniteTransition(label = "pulse")
     val pulseBorder by infiniteTransition.animateFloat(
-        initialValue = 2f,
-        targetValue = 5f,
+        initialValue = 2.5f,
+        targetValue = 5.5f,
         animationSpec = infiniteRepeatable(
             animation = tween(1000, easing = FastOutSlowInEasing),
             repeatMode = RepeatMode.Reverse
         ),
-        label = "pulse_anim"
+        label = "pulse_border"
     )
 
-    fun formatSpeedRate(bytesPerSec: Long): String {
+    fun formatSpeed(bytesPerSec: Long): String {
         return when {
             bytesPerSec >= 1024 * 1024 -> String.format("%.2f MB/s", bytesPerSec / (1024.0 * 1024.0))
             bytesPerSec >= 1024 -> String.format("%.1f KB/s", bytesPerSec / 1024.0)
@@ -134,7 +145,7 @@ fun AwgVpnMainScreen() {
         ) {
             Spacer(modifier = Modifier.height(20.dp))
 
-            // نوار بالای صفحه
+            // هدر بالا
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -150,6 +161,18 @@ fun AwgVpnMainScreen() {
                 )
 
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    // سوییچ زبان
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(cardBg)
+                            .border(1.dp, borderCol, RoundedCornerShape(14.dp))
+                            .clickable { isEnglish = !isEnglish }
+                            .padding(horizontal = 10.dp, vertical = 6.dp)
+                    ) {
+                        Text(if (isEnglish) "FA" else "EN", color = cyanAccent, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    }
+
                     // دکمه Split Tunneling
                     Box(
                         modifier = Modifier
@@ -159,7 +182,7 @@ fun AwgVpnMainScreen() {
                             .clickable { showSplitTunnelDialog = true }
                             .padding(horizontal = 10.dp, vertical = 6.dp)
                     ) {
-                        Text("Apps", color = purpleAccent, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        Text(if (isEnglish) "Apps" else "برنامه‌ها", color = purpleAccent, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                     }
 
                     // تغییر تم
@@ -178,7 +201,7 @@ fun AwgVpnMainScreen() {
 
             Spacer(modifier = Modifier.height(18.dp))
 
-            // مانیتورینگ زنده ترافیک و سرعت دانلود/آپلود
+            // باکس‌های سرعت دانلود و آپلود
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
@@ -192,12 +215,12 @@ fun AwgVpnMainScreen() {
                         .padding(14.dp)
                 ) {
                     Column {
-                        Text("⤓ DOWNLOAD", color = textMuted, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        Text(if (isEnglish) "⤓ DOWNLOAD" else "⤓ دانلود", color = textMuted, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                         Spacer(modifier = Modifier.height(6.dp))
                         Text(
-                            text = if (isRunning) formatSpeedRate(downloadSpeed) else "0 KB/s",
+                            text = if (isRunning) formatSpeed(downloadSpeed) else "0 KB/s",
                             color = cyanAccent,
-                            fontSize = 18.sp,
+                            fontSize = 19.sp,
                             fontWeight = FontWeight.ExtraBold
                         )
                     }
@@ -212,21 +235,21 @@ fun AwgVpnMainScreen() {
                         .padding(14.dp)
                 ) {
                     Column {
-                        Text("⤒ UPLOAD", color = textMuted, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        Text(if (isEnglish) "⤒ UPLOAD" else "⤒ آپلود", color = textMuted, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                         Spacer(modifier = Modifier.height(6.dp))
                         Text(
-                            text = if (isRunning) formatSpeedRate(uploadSpeed) else "0 KB/s",
+                            text = if (isRunning) formatSpeed(uploadSpeed) else "0 KB/s",
                             color = purpleAccent,
-                            fontSize = 18.sp,
+                            fontSize = 19.sp,
                             fontWeight = FontWeight.ExtraBold
                         )
                     }
                 }
             }
 
-            Spacer(modifier = Modifier.height(30.dp))
+            Spacer(modifier = Modifier.height(28.dp))
 
-            // دکمه بزرگ دایره‌ای اتصال VPN
+            // دکمه بزرگ اتصال VPN
             Box(
                 modifier = Modifier
                     .size(190.dp)
@@ -245,9 +268,11 @@ fun AwgVpnMainScreen() {
                             context.startService(intent)
                         } else {
                             if (configText.isBlank()) {
-                                Toast.makeText(context, "لطفاً کانفیگ را وارد کنید یا اسکن نمایید", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, if (isEnglish) "Please enter or scan a config" else "لطفاً کانفیگ را وارد کنید", Toast.LENGTH_SHORT).show()
                                 return@clickable
                             }
+                            saveConfigToStorage(configText)
+
                             val prepareIntent = VpnService.prepare(context)
                             if (prepareIntent != null) {
                                 vpnPrepareLauncher.launch(prepareIntent)
@@ -265,11 +290,11 @@ fun AwgVpnMainScreen() {
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(
-                        text = if (isRunning) "DISCONNECT" else "CONNECT",
+                        text = if (isRunning) (if (isEnglish) "DISCONNECT" else "قطع اتصال") else (if (isEnglish) "CONNECT" else "اتصال"),
                         color = if (isRunning) activeGreen else textMain,
-                        fontSize = 20.sp,
+                        fontSize = 19.sp,
                         fontWeight = FontWeight.Black,
-                        letterSpacing = 1.5.sp
+                        letterSpacing = 1.sp
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
@@ -281,33 +306,51 @@ fun AwgVpnMainScreen() {
                 }
             }
 
-            Spacer(modifier = Modifier.height(30.dp))
+            Spacer(modifier = Modifier.height(28.dp))
 
-            // بخش افزودن کانفیگ (دکمه QR و فیلد متنی)
+            // نوار بالای کادر متنی با دکمه ذخیره و اسکن QR
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("AmneziaWG Config (.conf)", color = textMain, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                Text(
+                    text = if (isEnglish) "Configuration (URI / .conf)" else "کانفیگ (لینک یا فایل .conf)",
+                    color = textMain,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold
+                )
 
-                // دکمه اسکن بارکد دوربین
-                Button(
-                    onClick = {
-                        val options = ScanOptions().apply {
-                            setDesiredBarcodeFormats(ScanOptions.QR_CODE)
-                            setPrompt("کیوآرکد کانفیگ را اسکن کنید")
-                            setBeepEnabled(true)
-                            setOrientationLocked(true)
-                        }
-                        qrScannerLauncher.launch(options)
-                    },
-                    shape = RoundedCornerShape(12.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2563EB)),
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                    modifier = Modifier.height(34.dp)
-                ) {
-                    Text("📷 اسکن QR", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    // دکمه ثبت کانفیگ
+                    Button(
+                        onClick = { saveConfigToStorage(configText) },
+                        shape = RoundedCornerShape(10.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = activeGreen),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                        modifier = Modifier.height(32.dp)
+                    ) {
+                        Text(if (isEnglish) "Save" else "ثبت کانفیگ", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                    }
+
+                    // دکمه اسکنر QR
+                    Button(
+                        onClick = {
+                            val options = ScanOptions().apply {
+                                setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+                                setPrompt(if (isEnglish) "Scan QR Code" else "بارکد کانفیگ را اسکن کنید")
+                                setBeepEnabled(true)
+                                setOrientationLocked(true)
+                            }
+                            qrScannerLauncher.launch(options)
+                        },
+                        shape = RoundedCornerShape(10.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2563EB)),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                        modifier = Modifier.height(32.dp)
+                    ) {
+                        Text(if (isEnglish) "📷 QR" else "📷 اسکن", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
                 }
             }
 
@@ -318,10 +361,10 @@ fun AwgVpnMainScreen() {
                 onValueChange = { configText = it },
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(180.dp),
+                    .height(170.dp),
                 placeholder = {
                     Text(
-                        "[Interface]\nPrivateKey = ...\nAddress = 10.0.0.2/32\nJc = 4\nJmin = 50\nJmax = 1000\nS1 = 15\nS2 = 25\nH1 = 1234\n...\n[Peer]\nPublicKey = ...\nEndpoint = ...",
+                        "wg://... یا awg://... یا [Interface]...",
                         color = textMuted.copy(alpha = 0.5f),
                         fontSize = 11.sp,
                         fontFamily = FontFamily.Monospace
@@ -336,111 +379,125 @@ fun AwgVpnMainScreen() {
                 shape = RoundedCornerShape(14.dp)
             )
 
-            Spacer(modifier = Modifier.height(14.dp))
-
             if (disallowedApps.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    text = "برنامه‌های مستثنی شده (Split): ${disallowedApps.size} برنامه",
+                    text = if (isEnglish) "${disallowedApps.size} apps bypassed via Split Tunnel" else "${disallowedApps.size} برنامه از تونل مستثنی شدند",
                     color = purpleAccent,
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Medium
                 )
             }
 
-            Spacer(modifier = Modifier.height(30.dp))
+            Spacer(modifier = Modifier.height(26.dp))
         }
 
-        // دیالوگ Split Tunneling
+        // دیالوگ کامل Split Tunneling با تمام برنامه‌های گوشی
         if (showSplitTunnelDialog) {
-            SplitTunnelAppListDialog(
+            SplitTunnelDialog(
                 context = context,
+                isEnglish = isEnglish,
                 selectedPackages = disallowedApps,
-                onDismiss = { showSplitTunnelDialog = false }
+                onDismiss = {
+                    prefs.edit().putStringSet("disallowed_apps", disallowedApps.toSet()).apply()
+                    showSplitTunnelDialog = false
+                }
             )
         }
     }
 }
 
 @Composable
-fun SplitTunnelAppListDialog(
+fun SplitTunnelDialog(
     context: Context,
+    isEnglish: Boolean,
     selectedPackages: MutableList<String>,
     onDismiss: () -> Unit
 ) {
     val pm = context.packageManager
-    var appList by remember { mutableStateOf<List<AppInfoItem>>(emptyList()) }
+    var appList by remember { mutableStateOf<List<AppItem>>(emptyList()) }
+    var isLoading by remember { mutableStateOf(true) }
 
     LaunchedEffect(Unit) {
         val installed = pm.getInstalledApplications(PackageManager.GET_META_DATA)
+        // تفکیک تمام برنامه‌هایی که آیکون یا امکان باز شدن دارند
         appList = installed
-            .filter { (it.flags and ApplicationInfo.FLAG_SYSTEM) == 0 } // برنامه‌های نصبی کاربر
+            .filter { app ->
+                // برنامه‌های دارای Intent باز شدن یا برنامه‌های غیرسیستمی
+                pm.getLaunchIntentForPackage(app.packageName) != null || ((app.flags and ApplicationInfo.FLAG_SYSTEM) == 0)
+            }
             .map { app ->
-                AppInfoItem(
+                AppItem(
                     name = app.loadLabel(pm).toString(),
                     packageName = app.packageName,
-                    isSelected = selectedPackages.contains(app.packageName)
+                    isBypassed = selectedPackages.contains(app.packageName)
                 )
             }
-            .sortedBy { it.name }
+            .sortedBy { it.name.lowercase() }
+        isLoading = false
     }
 
     Dialog(onDismissRequest = onDismiss) {
         Card(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(480.dp),
+                .height(520.dp),
             shape = RoundedCornerShape(20.dp),
             colors = CardDefaults.cardColors(containerColor = Color(0xFF131B2E))
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
                 Text(
-                    "Split Tunneling (دور زدن VPN)",
+                    text = if (isEnglish) "Split Tunneling (Bypass Apps)" else "اسپلیت تونلینگ (دور زدن VPN)",
                     color = Color.White,
-                    fontSize = 16.sp,
+                    fontSize = 15.sp,
                     fontWeight = FontWeight.Bold
                 )
+                Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    "برنامه‌های انتخاب‌شده مستقیم به اینترنت وصل می‌شوند (از تونل رد نمی‌شوند):",
+                    text = if (isEnglish) "Check apps that should NOT use the VPN (Direct Internet):" else "برنامه‌هایی که نباید از فیلترشکن رد شوند (اتصال مستقیم) را تیک بزنید:",
                     color = Color(0xFF94A3B8),
-                    fontSize = 12.sp
+                    fontSize = 11.sp
                 )
                 Spacer(modifier = Modifier.height(10.dp))
 
-                LazyColumn(modifier = Modifier.weight(1f)) {
-                    items(appList) { item ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable {
-                                    item.isSelected = !item.isSelected
-                                    if (item.isSelected) {
-                                        if (!selectedPackages.contains(item.packageName)) {
-                                            selectedPackages.add(item.packageName)
+                if (isLoading) {
+                    Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(color = Color(0xFF00E5FF))
+                    }
+                } else {
+                    LazyColumn(modifier = Modifier.weight(1f)) {
+                        items(appList) { app ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        app.isBypassed = !app.isBypassed
+                                        if (app.isBypassed) {
+                                            if (!selectedPackages.contains(app.packageName)) selectedPackages.add(app.packageName)
+                                        } else {
+                                            selectedPackages.remove(app.packageName)
                                         }
-                                    } else {
-                                        selectedPackages.remove(item.packageName)
                                     }
-                                }
-                                .padding(vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Checkbox(
-                                checked = item.isSelected,
-                                onCheckedChange = { checked ->
-                                    item.isSelected = checked
-                                    if (checked) {
-                                        if (!selectedPackages.contains(item.packageName)) {
-                                            selectedPackages.add(item.packageName)
+                                    .padding(vertical = 5.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Checkbox(
+                                    checked = app.isBypassed,
+                                    onCheckedChange = { checked ->
+                                        app.isBypassed = checked
+                                        if (checked) {
+                                            if (!selectedPackages.contains(app.packageName)) selectedPackages.add(app.packageName)
+                                        } else {
+                                            selectedPackages.remove(app.packageName)
                                         }
-                                    } else {
-                                        selectedPackages.remove(item.packageName)
-                                    }
+                                    },
+                                    colors = CheckboxDefaults.colors(checkedColor = Color(0xFF00E5FF))
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Column {
+                                    Text(app.name, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                                    Text(app.packageName, color = Color(0xFF64748B), fontSize = 10.sp)
                                 }
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Column {
-                                Text(item.name, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium)
-                                Text(item.packageName, color = Color(0xFF64748B), fontSize = 11.sp)
                             }
                         }
                     }
@@ -454,10 +511,9 @@ fun SplitTunnelAppListDialog(
                     shape = RoundedCornerShape(12.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00E5FF))
                 ) {
-                    Text("تأیید و بازگشت", color = Color.Black, fontWeight = FontWeight.Bold)
+                    Text(if (isEnglish) "Done" else "تأیید و بازگشت", color = Color.Black, fontWeight = FontWeight.Bold)
                 }
             }
         }
     }
 }
-
