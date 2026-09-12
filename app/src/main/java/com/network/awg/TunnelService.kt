@@ -53,12 +53,21 @@ class TunnelService : Service() {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
+        initBackend()
+    }
+
+    private fun initBackend() {
+        if (backend != null) return
         try {
-            backend = GoBackend(applicationContext)
+            backend = GoBackend(applicationContext, null)
         } catch (_: Throwable) {
             try {
-                val constructor = GoBackend::class.java.getConstructor(android.content.Context::class.java)
-                backend = constructor.newInstance(applicationContext) as Backend
+                val constructor = GoBackend::class.java.constructors.first()
+                val paramCount = constructor.parameterTypes.size
+                val args = Array<Any?>(paramCount) { index ->
+                    if (index == 0) applicationContext else null
+                }
+                backend = constructor.newInstance(*args) as Backend
             } catch (_: Throwable) {}
         }
     }
@@ -109,9 +118,7 @@ class TunnelService : Service() {
 
                 val wgConfig = Config.parse(ByteArrayInputStream(confBuilder.toString().toByteArray()))
 
-                if (backend == null) {
-                    backend = GoBackend(applicationContext)
-                }
+                initBackend()
 
                 backend?.setState(awgTunnel, Tunnel.State.UP, wgConfig)
                 _isRunning.value = true
