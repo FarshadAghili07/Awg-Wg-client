@@ -1,0 +1,48 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- سپر محافظتی بیرونی با گرادیان سایبر -->
+    <path
+        android:pathData="M54,16 L84,28 C84,54 71,78 54,92 C37,78 24,54 24,28 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="24"
+                android:startY="16"
+                android:endX="84"
+                android:endY="92"
+                android:type="linear">
+                <item android:offset="0.0" android:color="#00E5FF" />
+                <item android:offset="0.5" android:color="#2563EB" />
+                <item android:offset="1.0" android:color="#7C3AED" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- لایه شیشه‌ای داخلی سپر -->
+    <path
+        android:fillColor="#33FFFFFF"
+        android:pathData="M54,22 L78,32 C78,52 68,71 54,83 C40,71 30,52 30,32 Z" />
+
+    <!-- هسته شش‌ضلعی تونل Amnezia / WireGuard -->
+    <path
+        android:fillColor="#0E131F"
+        android:pathData="M54,34 L68,42 L68,58 L54,66 L40,58 L40,42 Z" />
+
+    <!-- مسیر وایرد نئونی مرکزی -->
+    <path
+        android:strokeColor="#00E5FF"
+        android:strokeWidth="3"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M48,46 L54,52 L60,46 M54,52 L54,60" />
+
+    <!-- نقطه اتصال نورانی -->
+    <path
+        android:fillColor="#A855F7"
+        android:pathData="M54,38 C55.6,38 57,39.4 57,41 C57,42.6 55.6,44 54,44 C52.4,44 51,42.6 51,41 C51,39.4 52.4,38 54,38 Z" />
+</vector>
+
