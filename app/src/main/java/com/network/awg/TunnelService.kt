@@ -3,10 +3,11 @@ package com.network.awg
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.Service
 import android.content.Intent
 import android.net.TrafficStats
-import android.net.VpnService
 import android.os.Build
+import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -17,7 +18,7 @@ import org.amnezia.awg.backend.Tunnel
 import org.amnezia.awg.config.Config
 import java.io.ByteArrayInputStream
 
-class TunnelService : VpnService() {
+class TunnelService : Service() {
 
     private val serviceScope = CoroutineScope(Dispatchers.IO + Job())
     private var trafficJob: Job? = null
@@ -36,7 +37,6 @@ class TunnelService : VpnService() {
         const val ACTION_CONNECT = "com.network.awg.CONNECT"
         const val ACTION_DISCONNECT = "com.network.awg.DISCONNECT"
         const val EXTRA_CONFIG = "extra_config"
-        const val EXTRA_DISALLOWED_APPS = "extra_disallowed_apps"
 
         private val _isRunning = MutableStateFlow(false)
         val isRunning = _isRunning.asStateFlow()
@@ -48,29 +48,29 @@ class TunnelService : VpnService() {
         val uploadSpeed = _uploadSpeed.asStateFlow()
     }
 
+    override fun onBind(intent: Intent?): IBinder? = null
+
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
         try {
-            backend = GoBackend(applicationContext, null)
-        } catch (_: Exception) {
+            backend = GoBackend(applicationContext)
+        } catch (_: Throwable) {
             try {
-                val constructor = GoBackend::class.java.constructors.first()
-                val args = Array(constructor.parameterTypes.size) { index ->
-                    if (index == 0) applicationContext else null
-                }
-                backend = constructor.newInstance(*args) as Backend
-            } catch (_: Exception) {}
+                val constructor = GoBackend::class.java.getConstructor(android.content.Context::class.java)
+                backend = constructor.newInstance(applicationContext) as Backend
+            } catch (_: Throwable) {}
         }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        startForeground(1, createNotification("سرویس آماده به کار است"))
+
         when (intent?.action) {
             ACTION_CONNECT -> {
                 val rawConfig = intent.getStringExtra(EXTRA_CONFIG) ?: ""
-                val disallowedApps = intent.getStringArrayListExtra(EXTRA_DISALLOWED_APPS) ?: arrayListOf()
                 val config = AwgConfig.parse(rawConfig)
-                startTunnel(config, disallowedApps)
+                startTunnel(config)
             }
             ACTION_DISCONNECT -> {
                 stopTunnel()
@@ -79,10 +79,10 @@ class TunnelService : VpnService() {
         return START_NOT_STICKY
     }
 
-    private fun startTunnel(awgConfig: AwgConfig, disallowedApps: List<String>) {
+    private fun startTunnel(awgConfig: AwgConfig) {
         serviceScope.launch {
             try {
-                startForeground(1, createNotification("در حال اتصال به هسته AmneziaWG..."))
+                startForeground(1, createNotification("در حال برقراری تونل AmneziaWG..."))
 
                 val confBuilder = StringBuilder()
                 confBuilder.append("[Interface]\n")
@@ -109,12 +109,14 @@ class TunnelService : VpnService() {
 
                 val wgConfig = Config.parse(ByteArrayInputStream(confBuilder.toString().toByteArray()))
 
-                backend?.setState(awgTunnel, Tunnel.State.UP, wgConfig)
+                if (backend == null) {
+                    backend = GoBackend(applicationContext)
+                }
 
+                backend?.setState(awgTunnel, Tunnel.State.UP, wgConfig)
                 _isRunning.value = true
                 startForeground(1, createNotification("متصل به تونل AmneziaWG"))
                 startSpeedMonitoring()
-
             } catch (e: Exception) {
                 stopTunnel()
             }
