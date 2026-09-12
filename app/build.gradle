@@ -47,6 +47,14 @@ android {
     }
 }
 
+// جلوگیری از خطای ناسازگاری نسخه AAR برای SDK 34
+configurations.all {
+    resolutionStrategy {
+        force 'androidx.core:core:1.13.1'
+        force 'androidx.core:core-ktx:1.13.1'
+    }
+}
+
 dependencies {
     implementation 'androidx.core:core-ktx:1.13.1'
     implementation 'androidx.lifecycle:lifecycle-runtime-ktx:2.8.4'
@@ -69,6 +77,6 @@ dependencies {
     // دریافت نام کشور و آی‌پی
     implementation 'com.squareup.okhttp3:okhttp:4.12.0'
 
-    // هسته رسمی AmneziaWG کامپایل شده روی Maven Central
+    // هسته رسمی AmneziaWG
     implementation 'com.zaneschepke:amneziawg-android:2.3.7'
 }
