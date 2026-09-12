@@ -11,6 +11,7 @@ import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import org.amnezia.awg.backend.Backend
 import org.amnezia.awg.backend.GoBackend
 import org.amnezia.awg.backend.Tunnel
 import org.amnezia.awg.config.Config
@@ -20,13 +21,14 @@ class TunnelService : VpnService() {
 
     private val serviceScope = CoroutineScope(Dispatchers.IO + Job())
     private var trafficJob: Job? = null
-    private var backend: GoBackend? = null
+    private var backend: Backend? = null
 
     private val awgTunnel = object : Tunnel {
         override fun getName(): String = "awg0"
         override fun onStateChange(newState: Tunnel.State) {
             _isRunning.value = (newState == Tunnel.State.UP)
         }
+        override fun isIpv4ResolutionPreferred(): Boolean = true
     }
 
     companion object {
@@ -48,7 +50,17 @@ class TunnelService : VpnService() {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
-        backend = GoBackend(applicationContext)
+        try {
+            backend = GoBackend(applicationContext, null)
+        } catch (_: Exception) {
+            try {
+                val constructor = GoBackend::class.java.constructors.first()
+                val args = Array(constructor.parameterTypes.size) { index ->
+                    if (index == 0) applicationContext else null
+                }
+                backend = constructor.newInstance(*args) as Backend
+            } catch (_: Exception) {}
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -71,7 +83,6 @@ class TunnelService : VpnService() {
             try {
                 startForeground(1, createNotification("در حال اتصال به هسته AmneziaWG..."))
 
-                // ساخت کانفیگ واقعی AmneziaWG شامل پارامترهای مبهم‌سازی Jc, Jmin, Jmax, S1, S2, H1-H4
                 val confBuilder = StringBuilder()
                 confBuilder.append("[Interface]\n")
                 confBuilder.append("PrivateKey = ${awgConfig.privateKey.trim()}\n")
@@ -97,7 +108,6 @@ class TunnelService : VpnService() {
 
                 val wgConfig = Config.parse(ByteArrayInputStream(confBuilder.toString().toByteArray()))
 
-                // استارت هسته بومی AmneziaWG Go برای عبور از فیلترینگ
                 backend?.setState(awgTunnel, Tunnel.State.UP, wgConfig)
 
                 _isRunning.value = true
