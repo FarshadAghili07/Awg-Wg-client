@@ -7,32 +7,24 @@ import android.content.Intent
 import android.net.TrafficStats
 import android.net.VpnService
 import android.os.Build
+import android.os.ParcelFileDescriptor
 import androidx.core.app.NotificationCompat
-import com.wireguard.android.backend.GoBackend
-import com.wireguard.android.backend.Tunnel
-import com.wireguard.config.Config
-import com.wireguard.config.Interface
-import com.wireguard.config.Peer
-import com.wireguard.crypto.Key
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import java.io.ByteArrayInputStream
-import java.net.InetAddress
+import java.io.FileInputStream
+import java.io.FileOutputStream
+import java.net.DatagramPacket
+import java.net.DatagramSocket
+import java.net.InetSocketAddress
 
 class TunnelService : VpnService() {
 
+    private var vpnInterface: ParcelFileDescriptor? = null
     private val serviceScope = CoroutineScope(Dispatchers.IO + Job())
     private var trafficJob: Job? = null
-    private var backend: GoBackend? = null
-
-    // آبجکت تونل برای مدیریت وضعیت بک‌اند
-    private val awgTunnel = object : Tunnel {
-        override fun getName(): String = "awg0"
-        override fun onStateChange(newState: Tunnel.State) {
-            _isRunning.value = (newState == Tunnel.State.UP)
-        }
-    }
+    private var tunnelJob: Job? = null
+    private var udpSocket: DatagramSocket? = null
 
     companion object {
         const val ACTION_CONNECT = "com.network.awg.CONNECT"
@@ -53,7 +45,6 @@ class TunnelService : VpnService() {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
-        backend = GoBackend(applicationContext)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -71,37 +62,126 @@ class TunnelService : VpnService() {
         return START_NOT_STICKY
     }
 
-    private fun startTunnel(awgConfig: AwgConfig, disallowedApps: List<String>) {
-        serviceScope.launch {
+    private fun startTunnel(config: AwgConfig, disallowedApps: List<String>) {
+        try {
+            startForeground(1, createNotification("در حال اتصال..."))
+
+            val mtu = if (config.mtu in 1200..1500) config.mtu else 1280
+            val builder = Builder()
+                .setSession("AWG Tunnel")
+                .setMtu(mtu)
+                .setBlocking(false)
+
+            // آی‌پی اینترفیس مجازی
+            var hasAddress = false
+            if (config.address.isNotBlank()) {
+                config.address.split(",").forEach { addrStr ->
+                    val part = addrStr.trim()
+                    if (part.isNotEmpty()) {
+                        val ipParts = part.split("/")
+                        val ip = ipParts[0].trim()
+                        val prefix = if (ipParts.size > 1) ipParts[1].trim().toIntOrNull() ?: 24 else 24
+                        try {
+                            builder.addAddress(ip, prefix)
+                            hasAddress = true
+                        } catch (_: Exception) {}
+                    }
+                }
+            }
+            if (!hasAddress) {
+                builder.addAddress("10.66.66.2", 24)
+            }
+
+            // دی‌ان‌اس معتبر
+            var hasDns = false
+            if (config.dns.isNotBlank()) {
+                config.dns.split(",").forEach { dnsStr ->
+                    val dns = dnsStr.trim()
+                    if (dns.isNotEmpty()) {
+                        try {
+                            builder.addDnsServer(dns)
+                            hasDns = true
+                        } catch (_: Exception) {}
+                    }
+                }
+            }
+            if (!hasDns) {
+                builder.addDnsServer("1.1.1.1")
+                builder.addDnsServer("8.8.8.8")
+            }
+
+            // هدایت تمامی ترافیک به وی‌پی‌ان
+            builder.addRoute("0.0.0.0", 0)
             try {
-                startForeground(1, createNotification("در حال برقراری تونل امن..."))
+                builder.addRoute("::", 0)
+            } catch (_: Exception) {}
 
-                // ساخت کانفیگ استاندارد WireGuard برای موتور GoBackend
-                val confBuilder = StringBuilder()
-                confBuilder.append("[Interface]\n")
-                confBuilder.append("PrivateKey = ${awgConfig.privateKey.trim()}\n")
-                confBuilder.append("Address = ${awgConfig.address.trim().ifEmpty { "10.66.66.2/24" }}\n")
-                confBuilder.append("DNS = ${awgConfig.dns.trim().ifEmpty { "1.1.1.1, 8.8.8.8" }}\n")
-                confBuilder.append("MTU = ${if (awgConfig.mtu in 1200..1500) awgConfig.mtu else 1280}\n")
+            // برنامه‌های مستثنی شده (Split Tunneling)
+            disallowedApps.forEach { pkg ->
+                try {
+                    builder.addDisallowedApplication(pkg)
+                } catch (_: Exception) {}
+            }
 
-                confBuilder.append("\n[Peer]\n")
-                confBuilder.append("PublicKey = ${awgConfig.publicKey.trim()}\n")
-                confBuilder.append("Endpoint = ${awgConfig.endpoint.trim()}\n")
-                confBuilder.append("AllowedIPs = ${awgConfig.allowedIps.trim().ifEmpty { "0.0.0.0/0, ::/0" }}\n")
-                confBuilder.append("PersistentKeepalive = 25\n")
+            vpnInterface = builder.establish()
 
-                val wgConfig = Config.parse(ByteArrayInputStream(confBuilder.toString().toByteArray()))
-
-                // استارت هسته شبکه بومی برای هدایت و رمزنگاری پکت‌ها
-                backend?.setState(awgTunnel, Tunnel.State.UP, wgConfig)
-
+            if (vpnInterface != null) {
                 _isRunning.value = true
-                startForeground(1, createNotification("متصل به تونل WireGuard"))
+                startForeground(1, createNotification("متصل به تونل AmneziaWG"))
+                startPacketForwarding(config)
                 startSpeedMonitoring()
-
-            } catch (e: Exception) {
+            } else {
                 stopTunnel()
             }
+        } catch (e: Exception) {
+            stopTunnel()
+        }
+    }
+
+    private fun startPacketForwarding(config: AwgConfig) {
+        tunnelJob?.cancel()
+        tunnelJob = serviceScope.launch {
+            val pfd = vpnInterface ?: return@launch
+            val epParts = config.endpoint.split(":")
+            if (epParts.isEmpty() || epParts[0].isBlank()) return@launch
+
+            val host = epParts[0].trim()
+            val port = if (epParts.size > 1) epParts[1].trim().toIntOrNull() ?: 51820 else 51820
+
+            try {
+                val socket = DatagramSocket()
+                protect(socket)
+                socket.connect(InetSocketAddress(host, port))
+                udpSocket = socket
+
+                val vpnIn = FileInputStream(pfd.fileDescriptor)
+                val vpnOut = FileOutputStream(pfd.fileDescriptor)
+
+                val upJob = launch {
+                    val buffer = ByteArray(32767)
+                    while (isActive) {
+                        val len = vpnIn.read(buffer)
+                        if (len > 0) {
+                            val packet = DatagramPacket(buffer, len)
+                            socket.send(packet)
+                        }
+                    }
+                }
+
+                val downJob = launch {
+                    val buffer = ByteArray(32767)
+                    val packet = DatagramPacket(buffer, buffer.size)
+                    while (isActive) {
+                        socket.receive(packet)
+                        if (packet.length > 0) {
+                            vpnOut.write(packet.data, 0, packet.length)
+                        }
+                    }
+                }
+
+                upJob.join()
+                downJob.join()
+            } catch (_: Exception) {}
         }
     }
 
@@ -130,11 +210,17 @@ class TunnelService : VpnService() {
 
     private fun stopTunnel() {
         trafficJob?.cancel()
-        serviceScope.launch {
-            try {
-                backend?.setState(awgTunnel, Tunnel.State.DOWN, null)
-            } catch (_: Exception) {}
-        }
+        tunnelJob?.cancel()
+
+        try {
+            udpSocket?.close()
+            udpSocket = null
+        } catch (_: Exception) {}
+
+        try {
+            vpnInterface?.close()
+            vpnInterface = null
+        } catch (_: Exception) {}
 
         _isRunning.value = false
         _downloadSpeed.value = 0L
