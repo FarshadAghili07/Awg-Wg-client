@@ -7,6 +7,7 @@ import android.content.SharedPreferences
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.net.VpnService
+import android.os.Build
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -38,6 +39,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import androidx.core.content.ContextCompat
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 import com.network.awg.data.AppDatabase
@@ -74,7 +76,6 @@ fun AwgClientApp() {
     val downloadSpeed by TunnelService.downloadSpeed.collectAsState()
     val uploadSpeed by TunnelService.uploadSpeed.collectAsState()
 
-    // دریافت لیست زنده کانفیگ‌ها از دیتابیس Room
     val configList by db.configDao().getAllConfigs().collectAsState(initial = emptyList())
 
     var configInputText by remember { mutableStateOf("") }
@@ -82,7 +83,6 @@ fun AwgClientApp() {
     var isEnglish by remember { mutableStateOf(false) }
     var showSplitTunnelDialog by remember { mutableStateOf(false) }
 
-    // اطلاعات کشور متصل‌شده
     var connectedCountryInfo by remember { mutableStateOf<ServerLocation?>(null) }
 
     val disallowedApps = remember {
@@ -91,10 +91,9 @@ fun AwgClientApp() {
         }
     }
 
-    // استعلام کشور و لوکیشن پس از برقراری اتصال موفقیت‌آمیز
     LaunchedEffect(isRunning) {
         if (isRunning) {
-            delay(2000) // تاخیر کوتاه برای تثبیت ترافیک در تونل
+            delay(2000)
             connectedCountryInfo = LocationHelper.fetchConnectedCountry()
         } else {
             connectedCountryInfo = null
@@ -102,6 +101,29 @@ fun AwgClientApp() {
     }
 
     val selectedConfig = configList.find { it.isSelected }
+
+    fun launchService(targetConfig: String) {
+        val intent = Intent(context, TunnelService::class.java).apply {
+            action = TunnelService.ACTION_CONNECT
+            putExtra(TunnelService.EXTRA_CONFIG, targetConfig)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            ContextCompat.startForegroundService(context, intent)
+        } else {
+            context.startService(intent)
+        }
+    }
+
+    val vpnPrepareLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            val target = selectedConfig?.rawUri ?: configInputText
+            launchService(target)
+        } else {
+            Toast.makeText(context, if (isEnglish) "VPN Permission Denied" else "مجوز اتصال تایید نشد", Toast.LENGTH_SHORT).show()
+        }
+    }
 
     fun addConfig(rawText: String) {
         if (rawText.isBlank()) return
@@ -116,22 +138,6 @@ fun AwgClientApp() {
             )
             configInputText = ""
             Toast.makeText(context, if (isEnglish) "Config Saved!" else "کانفیگ ذخیره شد", Toast.LENGTH_SHORT).show()
-        }
-    }
-
-    val vpnPrepareLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        if (result.resultCode == Activity.RESULT_OK) {
-            val target = selectedConfig?.rawUri ?: configInputText
-            val intent = Intent(context, TunnelService::class.java).apply {
-                action = TunnelService.ACTION_CONNECT
-                putExtra(TunnelService.EXTRA_CONFIG, target)
-                putStringArrayListExtra(TunnelService.EXTRA_DISALLOWED_APPS, ArrayList(disallowedApps))
-            }
-            context.startService(intent)
-        } else {
-            Toast.makeText(context, if (isEnglish) "VPN Permission Denied" else "مجوز اتصال تایید نشد", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -234,7 +240,7 @@ fun AwgClientApp() {
 
             Spacer(modifier = Modifier.height(18.dp))
 
-            // سرعت دانلود و آپلود
+            // باکس‌های سرعت
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
@@ -282,7 +288,7 @@ fun AwgClientApp() {
 
             Spacer(modifier = Modifier.height(24.dp))
 
-            // دکمه اتصال
+            // دکمه اتصال VPN
             Box(
                 modifier = Modifier
                     .size(190.dp)
@@ -314,12 +320,7 @@ fun AwgClientApp() {
                             if (prepareIntent != null) {
                                 vpnPrepareLauncher.launch(prepareIntent)
                             } else {
-                                val intent = Intent(context, TunnelService::class.java).apply {
-                                    action = TunnelService.ACTION_CONNECT
-                                    putExtra(TunnelService.EXTRA_CONFIG, targetConfig)
-                                    putStringArrayListExtra(TunnelService.EXTRA_DISALLOWED_APPS, ArrayList(disallowedApps))
-                                }
-                                context.startService(intent)
+                                launchService(targetConfig)
                             }
                         }
                     },
@@ -345,7 +346,6 @@ fun AwgClientApp() {
 
             Spacer(modifier = Modifier.height(14.dp))
 
-            // نمایش کشور و پرچم متصل شده
             if (isRunning) {
                 Text(
                     text = connectedCountryInfo?.let { "${it.flagEmoji} ${it.country} (${it.ip})" }
@@ -358,7 +358,7 @@ fun AwgClientApp() {
 
             Spacer(modifier = Modifier.height(18.dp))
 
-            // بخش لیست کانفیگ‌های ذخیره شده
+            // لیست کانفیگ‌ها
             if (configList.isNotEmpty()) {
                 Text(
                     text = if (isEnglish) "Saved Configs (Select One):" else "کانفیگ‌های ذخیره شده (یکی را انتخاب کنید):",
@@ -429,7 +429,7 @@ fun AwgClientApp() {
                 Spacer(modifier = Modifier.height(18.dp))
             }
 
-            // بخش افزودن کانفیگ جدید
+            // باکس افزودن کانفیگ
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -497,16 +497,6 @@ fun AwgClientApp() {
                 ),
                 shape = RoundedCornerShape(14.dp)
             )
-
-            if (disallowedApps.isNotEmpty()) {
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(
-                    text = if (isEnglish) "${disallowedApps.size} apps bypassed via Split Tunnel" else "${disallowedApps.size} برنامه از تونل مستثنی شدند",
-                    color = purpleAccent,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Medium
-                )
-            }
 
             Spacer(modifier = Modifier.height(26.dp))
         }
